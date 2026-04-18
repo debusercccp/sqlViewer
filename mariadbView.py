@@ -184,25 +184,39 @@ def connect_to_db() -> Optional[MariaDBViewer]:
 def query_mode(viewer: MariaDBViewer):
     """Interactive query execution"""
     console.print("\n[bold]Editor Query[/bold]")
-    console.print("[dim]Scrivi la query SQL (termina con ';' e premi invio su riga vuota)[/dim]")
+    console.print("[dim]Scrivi la query SQL (termina con ';')[/dim]")
+    console.print("[dim]Premi invio su riga vuota per eseguire[/dim]")
     console.print("[dim]Oppure scrivi 'exit' per tornare al menu[/dim]\n")
     
     query_lines = []
     
     while True:
-        line = input("> ")
-        
-        if line.strip().lower() == 'exit':
+        try:
+            line = input("> ").strip()
+        except EOFError:
             return
         
-        query_lines.append(line)
+        if line.lower() == 'exit':
+            return
         
-        # Check if query is complete (ends with semicolon)
-        if line.strip().endswith(';'):
-            query = '\n'.join(query_lines)
+        if not line and not query_lines:
+            continue
+        
+        if line:
+            query_lines.append(line)
+        
+        # Check if we should execute (empty line after content or line ends with ;)
+        if (not line and query_lines) or (line and line.endswith(';')):
+            query = ' '.join(query_lines)
+            
+            # Clean up query
+            query = query.strip()
+            if not query.endswith(';'):
+                query += ';'
             
             # Display query with syntax highlighting
             syntax = Syntax(query, "sql", theme="monokai", line_numbers=False)
+            console.print("\n")
             console.print(Panel(syntax, title="Query", border_style="blue"))
             
             # Execute
@@ -227,14 +241,14 @@ def query_mode(viewer: MariaDBViewer):
 
 
 def query_builder(viewer: MariaDBViewer):
-    """Interactive query builder with filters"""
+    """Interactive query builder with filters and joins"""
     if not viewer.current_db:
         console.print("[yellow]Nessun database selezionato[/yellow]")
         return
     
     console.print("\n[bold]Query Builder[/bold]")
     
-    # Select table
+    # Select main table
     tables = viewer.get_tables()
     if not tables:
         console.print("[yellow]Nessuna tabella disponibile[/yellow]")
@@ -244,37 +258,95 @@ def query_builder(viewer: MariaDBViewer):
     for i, t in enumerate(tables, 1):
         console.print(f"  {i}. {t}")
     
-    table = Prompt.ask("\nTabella da interrogare")
-    if table not in tables:
+    main_table = Prompt.ask("\nTabella principale")
+    if main_table not in tables:
         console.print("[red]Tabella non trovata[/red]")
         return
     
-    # Get table structure
-    structure = viewer.get_table_structure(table)
-    if structure is None:
+    # Get main table structure
+    main_structure = viewer.get_table_structure(main_table)
+    if main_structure is None:
         console.print("[red]Errore recupero struttura tabella[/red]")
         return
     
-    columns = structure['Field'].tolist()
+    main_columns = main_structure['Field'].tolist()
     
-    # Select columns
-    console.print("\n[bold]Colonne disponibili:[/bold]")
-    for i, col in enumerate(columns, 1):
-        col_type = structure[structure['Field'] == col]['Type'].values[0]
-        console.print(f"  {i}. {col} ({col_type})")
+    # JOIN section
+    joins = []
+    all_columns = {main_table: main_columns}
     
-    console.print("\n[dim]Inserisci numeri separati da virgola (es: 1,3,5) o 'all' per tutte[/dim]")
-    col_choice = Prompt.ask("Colonne da selezionare", default="all")
+    console.print("\n[bold]JOIN con altre tabelle[/bold]")
+    while Confirm.ask("\nAggiungere un JOIN?", default=False):
+        console.print("\n[bold]Tabelle disponibili:[/bold]")
+        available_tables = [t for t in tables if t != main_table and t not in [j['table'] for j in joins]]
+        for i, t in enumerate(available_tables, 1):
+            console.print(f"  {i}. {t}")
+        
+        if not available_tables:
+            console.print("[yellow]Nessuna tabella disponibile per JOIN[/yellow]")
+            break
+        
+        join_table = Prompt.ask("Tabella da unire")
+        if join_table not in available_tables:
+            console.print("[red]Tabella non valida[/red]")
+            continue
+        
+        # Get join table structure
+        join_structure = viewer.get_table_structure(join_table)
+        if join_structure is None:
+            continue
+        
+        join_columns = join_structure['Field'].tolist()
+        all_columns[join_table] = join_columns
+        
+        join_type = Prompt.ask(
+            "Tipo JOIN",
+            choices=["INNER", "LEFT", "RIGHT"],
+            default="INNER"
+        )
+        
+        console.print(f"\n[bold]Colonne di {main_table}:[/bold]")
+        for col in main_columns:
+            console.print(f"  - {col}")
+        
+        console.print(f"\n[bold]Colonne di {join_table}:[/bold]")
+        for col in join_columns:
+            console.print(f"  - {col}")
+        
+        left_col = Prompt.ask(f"Colonna di {main_table}")
+        right_col = Prompt.ask(f"Colonna di {join_table}")
+        
+        joins.append({
+            'table': join_table,
+            'type': join_type,
+            'left_col': left_col,
+            'right_col': right_col
+        })
+        
+        console.print(f"[green]JOIN aggiunto: {main_table}.{left_col} = {join_table}.{right_col}[/green]")
     
-    if col_choice.lower() == 'all':
-        selected_cols = columns
-    else:
-        try:
-            indices = [int(x.strip()) - 1 for x in col_choice.split(',')]
-            selected_cols = [columns[i] for i in indices if 0 <= i < len(columns)]
-        except:
-            console.print("[red]Input non valido[/red]")
-            return
+    # Select columns from all tables
+    console.print("\n[bold]Selezione colonne[/bold]")
+    selected_cols = []
+    
+    for table_name, cols in all_columns.items():
+        console.print(f"\n[bold]Colonne di {table_name}:[/bold]")
+        for i, col in enumerate(cols, 1):
+            console.print(f"  {i}. {col}")
+        
+        console.print(f"\n[dim]Numeri separati da virgola o 'all' o 'skip'[/dim]")
+        col_choice = Prompt.ask(f"Colonne da {table_name}", default="skip")
+        
+        if col_choice.lower() == 'skip':
+            continue
+        elif col_choice.lower() == 'all':
+            selected_cols.extend([f"{table_name}.{col}" for col in cols])
+        else:
+            try:
+                indices = [int(x.strip()) - 1 for x in col_choice.split(',')]
+                selected_cols.extend([f"{table_name}.{cols[i]}" for i in indices if 0 <= i < len(cols)])
+            except:
+                console.print("[red]Input non valido, colonne saltate[/red]")
     
     if not selected_cols:
         console.print("[red]Nessuna colonna selezionata[/red]")
@@ -284,19 +356,14 @@ def query_builder(viewer: MariaDBViewer):
     filters = []
     console.print("\n[bold]Filtri (WHERE)[/bold]")
     
-    while True:
-        if not Confirm.ask("\nAggiungere un filtro?", default=False):
-            break
+    while Confirm.ask("\nAggiungere un filtro?", default=False):
+        console.print("\n[bold]Tabelle e colonne disponibili:[/bold]")
+        for table_name, cols in all_columns.items():
+            console.print(f"\n{table_name}:")
+            for col in cols:
+                console.print(f"  - {col}")
         
-        console.print("\n[bold]Colonne per filtro:[/bold]")
-        for i, col in enumerate(columns, 1):
-            col_type = structure[structure['Field'] == col]['Type'].values[0]
-            console.print(f"  {i}. {col} ({col_type})")
-        
-        filter_col = Prompt.ask("Colonna da filtrare")
-        if filter_col not in columns:
-            console.print("[red]Colonna non trovata[/red]")
-            continue
+        filter_col = Prompt.ask("Colonna (formato: tabella.colonna)")
         
         operator = Prompt.ask(
             "Operatore",
@@ -315,23 +382,22 @@ def query_builder(viewer: MariaDBViewer):
             filters.append(f"{filter_col} LIKE '{value}'")
         else:
             value = Prompt.ask("Valore")
-            col_type = structure[structure['Field'] == filter_col]['Type'].values[0]
-            
-            # Check if numeric type
-            if any(t in col_type.lower() for t in ['int', 'decimal', 'float', 'double']):
+            # Try to detect if numeric
+            try:
+                float(value)
                 filters.append(f"{filter_col} {operator} {value}")
-            else:
+            except:
                 filters.append(f"{filter_col} {operator} '{value}'")
     
     # ORDER BY
     order_col = None
     if Confirm.ask("\nAggiungere ordinamento (ORDER BY)?", default=False):
-        console.print("\n[bold]Colonne per ordinamento:[/bold]")
-        for i, col in enumerate(selected_cols, 1):
-            console.print(f"  {i}. {col}")
+        console.print("\n[bold]Colonne selezionate:[/bold]")
+        for col in selected_cols:
+            console.print(f"  - {col}")
         
         order_col = Prompt.ask("Colonna per ordinamento")
-        if order_col in selected_cols:
+        if order_col in selected_cols or any(order_col in col for col in selected_cols):
             order_dir = Prompt.ask("Direzione", choices=["ASC", "DESC"], default="ASC")
         else:
             console.print("[yellow]Colonna non valida, ordinamento saltato[/yellow]")
@@ -343,14 +409,21 @@ def query_builder(viewer: MariaDBViewer):
         limit = Prompt.ask("Numero massimo righe", default="100")
     
     # Build final query
-    query = f"SELECT {', '.join(selected_cols)} FROM {table}"
+    query = f"SELECT {', '.join(selected_cols)}\nFROM {main_table}"
     
+    # Add JOINs
+    for join in joins:
+        query += f"\n{join['type']} JOIN {join['table']} ON {main_table}.{join['left_col']} = {join['table']}.{join['right_col']}"
+    
+    # Add WHERE
     if filters:
         query += f"\nWHERE {' AND '.join(filters)}"
     
+    # Add ORDER BY
     if order_col:
         query += f"\nORDER BY {order_col} {order_dir}"
     
+    # Add LIMIT
     if limit:
         query += f"\nLIMIT {limit}"
     
@@ -358,6 +431,7 @@ def query_builder(viewer: MariaDBViewer):
     
     # Display and execute
     syntax = Syntax(query, "sql", theme="monokai", line_numbers=False)
+    console.print("\n")
     console.print(Panel(syntax, title="Query Generata", border_style="blue"))
     
     if not Confirm.ask("\nEseguire questa query?", default=True):
