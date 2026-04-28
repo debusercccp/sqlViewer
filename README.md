@@ -17,7 +17,7 @@ pip install -r requirements.txt
 ## Utilizzo
 
 ```bash
-python mariadb_viewer.py
+python mariadbView.py
 ```
 
 Al primo avvio ti verranno richiesti:
