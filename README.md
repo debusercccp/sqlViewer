@@ -11,7 +11,7 @@ Visualizzatore interattivo per database MariaDB/MySQL basato su terminale.
 ## Installazione
 
 ```bash
-pip install -r requirements_mariadb.txt
+pip install -r requirements.txt
 ```
 
 ## Utilizzo
