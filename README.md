@@ -177,9 +177,9 @@ WHERE nome LIKE 'M_rio'
 ## Struttura
 
 ```
-mariadb_viewer.py          # Applicazione principale
-requirements_mariadb.txt   # Dipendenze
-README_mariadb.md         # Documentazione
+mariadbView.py          # Applicazione principale
+requirements.txt   # Dipendenze
+README.md         # Documentazione
 ```
 
 La classe `MariaDBViewer` gestisce:
